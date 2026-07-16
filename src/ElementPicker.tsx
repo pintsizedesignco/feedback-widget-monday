@@ -53,13 +53,41 @@ async function captureElement(el: Element): Promise<string> {
   ctx.fillRect(0, 0, padded.width, padded.height);
   ctx.drawImage(rawCanvas, padding, padding);
 
-  // Compress, falling back to lower quality if the result is still large
-  // (defense in depth — server also enforces the ~4MB cap).
-  let dataUrl = padded.toDataURL("image/jpeg", 0.72);
-  if (dataUrl.length > 4_000_000) {
-    dataUrl = padded.toDataURL("image/jpeg", 0.45);
+  return compressToTarget(padded);
+}
+
+// Many hosts run a WAF (ModSecurity/Imunify360 etc.) with a default request
+// body limit around ~1MB — well under the 4MB the server itself allows. Stay
+// safely under that regardless of what the actual hosting environment turns
+// out to be: step down JPEG quality first, then physically downscale the
+// canvas if quality alone isn't enough (huge/high-DPI captures don't shrink
+// much further from quality alone).
+const TARGET_BASE64_BYTES = 700_000;
+const QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
+
+function compressToTarget(canvas: HTMLCanvasElement): string {
+  for (const quality of QUALITY_STEPS) {
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
   }
-  return dataUrl;
+
+  // Still too big even at the lowest quality — the pixel dimensions
+  // themselves are the problem (e.g. capturing a huge section on a
+  // high-DPI display). Downscale and try the quality ladder again.
+  const half = document.createElement("canvas");
+  half.width = Math.max(1, Math.round(canvas.width / 2));
+  half.height = Math.max(1, Math.round(canvas.height / 2));
+  const ctx = half.getContext("2d");
+  if (!ctx) return canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  ctx.drawImage(canvas, 0, 0, half.width, half.height);
+
+  for (const quality of QUALITY_STEPS) {
+    const dataUrl = half.toDataURL("image/jpeg", quality);
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+  }
+
+  // Last resort: smallest we can reasonably produce.
+  return half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
 }
 
 /**

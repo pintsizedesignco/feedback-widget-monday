@@ -344,11 +344,26 @@ async function captureElement(el) {
   ctx.fillStyle = resolveBackgroundColor(el);
   ctx.fillRect(0, 0, padded.width, padded.height);
   ctx.drawImage(rawCanvas, padding, padding);
-  let dataUrl = padded.toDataURL("image/jpeg", 0.72);
-  if (dataUrl.length > 4e6) {
-    dataUrl = padded.toDataURL("image/jpeg", 0.45);
+  return compressToTarget(padded);
+}
+var TARGET_BASE64_BYTES = 7e5;
+var QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
+function compressToTarget(canvas) {
+  for (const quality of QUALITY_STEPS) {
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
   }
-  return dataUrl;
+  const half = document.createElement("canvas");
+  half.width = Math.max(1, Math.round(canvas.width / 2));
+  half.height = Math.max(1, Math.round(canvas.height / 2));
+  const ctx = half.getContext("2d");
+  if (!ctx) return canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  ctx.drawImage(canvas, 0, 0, half.width, half.height);
+  for (const quality of QUALITY_STEPS) {
+    const dataUrl = half.toDataURL("image/jpeg", quality);
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+  }
+  return half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
 }
 function ElementPicker({ active, onCapture, onCancel, onCapturing }) {
   const [rect, setRect] = useState2(null);
