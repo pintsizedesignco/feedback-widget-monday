@@ -22,7 +22,6 @@
   ],
   "scripts": {
     "build": "tsup",
-    "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
