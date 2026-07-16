@@ -9,8 +9,14 @@ export interface FeedbackSubmission {
   viewportWidth: number;
   viewportHeight: number;
   submittedAt: string;
-  screenshot?: string;
-  attachment?: string;
+  // Images travel as raw base64 + a separate mime type, never as a
+  // `data:...;base64,` string — that literal pattern trips a common WAF/
+  // ModSecurity rule (data-URI detection) on some hosts, even for tiny
+  // images, causing a 403 before the request ever reaches the server.
+  screenshotBase64?: string;
+  screenshotMimeType?: string;
+  attachmentBase64?: string;
+  attachmentMimeType?: string;
   attachmentFilename?: string;
 }
 

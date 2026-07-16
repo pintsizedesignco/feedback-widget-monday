@@ -327,6 +327,11 @@ function resolveBackgroundColor(el) {
   }
   return "#ffffff";
 }
+function toRawBase64(dataUrl) {
+  const commaIndex = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
+  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "image/jpeg" };
+}
 async function captureElement(el) {
   const scale = Math.min(2, window.devicePixelRatio || 1);
   const rawCanvas = await html2canvas(el, {
@@ -340,7 +345,7 @@ async function captureElement(el) {
   padded.width = rawCanvas.width + padding * 2;
   padded.height = rawCanvas.height + padding * 2;
   const ctx = padded.getContext("2d");
-  if (!ctx) return rawCanvas.toDataURL("image/jpeg", 0.72);
+  if (!ctx) return toRawBase64(rawCanvas.toDataURL("image/jpeg", 0.72));
   ctx.fillStyle = resolveBackgroundColor(el);
   ctx.fillRect(0, 0, padded.width, padded.height);
   ctx.drawImage(rawCanvas, padding, padding);
@@ -351,19 +356,19 @@ var QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
 function compressToTarget(canvas) {
   for (const quality of QUALITY_STEPS) {
     const dataUrl = canvas.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
   }
   const half = document.createElement("canvas");
   half.width = Math.max(1, Math.round(canvas.width / 2));
   half.height = Math.max(1, Math.round(canvas.height / 2));
   const ctx = half.getContext("2d");
-  if (!ctx) return canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  if (!ctx) return toRawBase64(canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
   ctx.drawImage(canvas, 0, 0, half.width, half.height);
   for (const quality of QUALITY_STEPS) {
     const dataUrl = half.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
   }
-  return half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  return toRawBase64(half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
 }
 function ElementPicker({ active, onCapture, onCancel, onCapturing }) {
   const [rect, setRect] = useState2(null);
@@ -388,8 +393,8 @@ function ElementPicker({ active, onCapture, onCancel, onCapturing }) {
       e.stopPropagation();
       onCapturing(true);
       try {
-        const dataUrl = await captureElement(target);
-        onCapture(dataUrl);
+        const image = await captureElement(target);
+        onCapture(image);
       } finally {
         onCapturing(false);
       }
@@ -450,6 +455,11 @@ function CheckIcon(props) {
 
 // src/FeedbackWidget.tsx
 import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+function toRawBase642(dataUrl) {
+  const commaIndex = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
+  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "application/octet-stream" };
+}
 var DEFAULT_CATEGORIES = ["Design", "Content", "Bug", "Other"];
 var DEFAULT_STORAGE_KEY = "feedback-widget-name";
 var MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
@@ -483,8 +493,8 @@ function FeedbackWidget({
   const [errors, setErrors] = useState3({});
   const [isPicking, setIsPicking] = useState3(false);
   const [isCapturing, setIsCapturing] = useState3(false);
-  const [screenshotDataUrl, setScreenshotDataUrl] = useState3(null);
-  const [attachmentDataUrl, setAttachmentDataUrl] = useState3(null);
+  const [screenshot, setScreenshot] = useState3(null);
+  const [attachment, setAttachment] = useState3(null);
   const [attachmentFilename, setAttachmentFilename] = useState3(null);
   const fileInputRef = useRef(null);
   const [isSubmitting, setIsSubmitting] = useState3(false);
@@ -499,8 +509,8 @@ function FeedbackWidget({
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
   }, []);
   const resetAttachments = () => {
-    setScreenshotDataUrl(null);
-    setAttachmentDataUrl(null);
+    setScreenshot(null);
+    setAttachment(null);
     setAttachmentFilename(null);
   };
   const handleChangeUser = () => {
@@ -515,8 +525,8 @@ function FeedbackWidget({
     setOpen(false);
     setIsPicking(true);
   };
-  const handleCapture = (dataUrl) => {
-    setScreenshotDataUrl(dataUrl);
+  const handleCapture = (image) => {
+    setScreenshot(image);
     setIsPicking(false);
     setOpen(true);
   };
@@ -538,7 +548,7 @@ function FeedbackWidget({
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachmentDataUrl(reader.result);
+      setAttachment(toRawBase642(reader.result));
       setAttachmentFilename(file.name);
     };
     reader.readAsDataURL(file);
@@ -569,8 +579,10 @@ function FeedbackWidget({
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
           submittedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          screenshot: screenshotDataUrl ?? void 0,
-          attachment: attachmentDataUrl ?? void 0,
+          screenshotBase64: screenshot?.base64 ?? void 0,
+          screenshotMimeType: screenshot?.mimeType ?? void 0,
+          attachmentBase64: attachment?.base64 ?? void 0,
+          attachmentMimeType: attachment?.mimeType ?? void 0,
           attachmentFilename: attachmentFilename ?? void 0
         })
       });
@@ -665,14 +677,14 @@ function FeedbackWidget({
                 {
                   type: "button",
                   className: "fw-attach-btn",
-                  "data-active": screenshotDataUrl ? "true" : "false",
+                  "data-active": screenshot ? "true" : "false",
                   disabled: isCapturing,
                   onClick: handleStartPicking,
-                  title: screenshotDataUrl ? "Screenshot captured \u2014 click to recapture" : "Capture a part of the page",
+                  title: screenshot ? "Screenshot captured \u2014 click to recapture" : "Capture a part of the page",
                   children: [
-                    screenshotDataUrl ? /* @__PURE__ */ jsx3(CheckIcon, {}) : /* @__PURE__ */ jsx3(CrosshairIcon, {}),
-                    /* @__PURE__ */ jsx3("span", { className: "fw-attach-label", children: isCapturing ? "Capturing\u2026" : screenshotDataUrl ? "Captured" : "Capture element" }),
-                    screenshotDataUrl && /* @__PURE__ */ jsx3(
+                    screenshot ? /* @__PURE__ */ jsx3(CheckIcon, {}) : /* @__PURE__ */ jsx3(CrosshairIcon, {}),
+                    /* @__PURE__ */ jsx3("span", { className: "fw-attach-label", children: isCapturing ? "Capturing\u2026" : screenshot ? "Captured" : "Capture element" }),
+                    screenshot && /* @__PURE__ */ jsx3(
                       "span",
                       {
                         role: "button",
@@ -681,7 +693,7 @@ function FeedbackWidget({
                         className: "fw-attach-remove",
                         onClick: (e) => {
                           e.stopPropagation();
-                          setScreenshotDataUrl(null);
+                          setScreenshot(null);
                         },
                         children: /* @__PURE__ */ jsx3(CloseIcon, {})
                       }
@@ -694,13 +706,13 @@ function FeedbackWidget({
                 {
                   type: "button",
                   className: "fw-attach-btn",
-                  "data-active": attachmentDataUrl ? "true" : "false",
+                  "data-active": attachment ? "true" : "false",
                   onClick: () => fileInputRef.current?.click(),
                   title: attachmentFilename ? `${attachmentFilename} \u2014 click to replace` : "Attach an image (max 4MB)",
                   children: [
-                    attachmentDataUrl ? /* @__PURE__ */ jsx3(CheckIcon, {}) : /* @__PURE__ */ jsx3(PaperclipIcon, {}),
-                    /* @__PURE__ */ jsx3("span", { className: "fw-attach-label", children: attachmentDataUrl ? attachmentFilename ?? "Attached" : "Attach image" }),
-                    attachmentDataUrl && /* @__PURE__ */ jsx3(
+                    attachment ? /* @__PURE__ */ jsx3(CheckIcon, {}) : /* @__PURE__ */ jsx3(PaperclipIcon, {}),
+                    /* @__PURE__ */ jsx3("span", { className: "fw-attach-label", children: attachment ? attachmentFilename ?? "Attached" : "Attach image" }),
+                    attachment && /* @__PURE__ */ jsx3(
                       "span",
                       {
                         role: "button",
@@ -709,7 +721,7 @@ function FeedbackWidget({
                         className: "fw-attach-remove",
                         onClick: (e) => {
                           e.stopPropagation();
-                          setAttachmentDataUrl(null);
+                          setAttachment(null);
                           setAttachmentFilename(null);
                         },
                         children: /* @__PURE__ */ jsx3(CloseIcon, {})

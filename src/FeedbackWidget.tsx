@@ -2,9 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useBrandColor } from "./brandColor";
 import { ensureStylesInjected } from "./styles";
-import ElementPicker from "./ElementPicker";
+import ElementPicker, { type CapturedImage } from "./ElementPicker";
 import { MessageIcon, CloseIcon, CrosshairIcon, PaperclipIcon, CheckIcon } from "./icons";
 import type { FeedbackWidgetProps, FeedbackSubmissionResult } from "./types";
+
+// Strips the "data:<mime>;base64," prefix for the manually-uploaded image,
+// same reasoning as ElementPicker's toRawBase64 — that literal string trips
+// a common WAF/ModSecurity data-URI detection rule on some hosts.
+function toRawBase64(dataUrl: string): CapturedImage {
+  const commaIndex = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
+  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "application/octet-stream" };
+}
 
 const DEFAULT_CATEGORIES = ["Design", "Content", "Bug", "Other"];
 const DEFAULT_STORAGE_KEY = "feedback-widget-name";
@@ -50,8 +59,8 @@ export default function FeedbackWidget({
 
   const [isPicking, setIsPicking] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
-  const [attachmentDataUrl, setAttachmentDataUrl] = useState<string | null>(null);
+  const [screenshot, setScreenshot] = useState<CapturedImage | null>(null);
+  const [attachment, setAttachment] = useState<CapturedImage | null>(null);
   const [attachmentFilename, setAttachmentFilename] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,8 +79,8 @@ export default function FeedbackWidget({
   }, []);
 
   const resetAttachments = () => {
-    setScreenshotDataUrl(null);
-    setAttachmentDataUrl(null);
+    setScreenshot(null);
+    setAttachment(null);
     setAttachmentFilename(null);
   };
 
@@ -90,8 +99,8 @@ export default function FeedbackWidget({
     setIsPicking(true);
   };
 
-  const handleCapture = (dataUrl: string) => {
-    setScreenshotDataUrl(dataUrl);
+  const handleCapture = (image: CapturedImage) => {
+    setScreenshot(image);
     setIsPicking(false);
     setOpen(true);
   };
@@ -117,7 +126,7 @@ export default function FeedbackWidget({
 
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachmentDataUrl(reader.result as string);
+      setAttachment(toRawBase64(reader.result as string));
       setAttachmentFilename(file.name);
     };
     reader.readAsDataURL(file);
@@ -151,8 +160,10 @@ export default function FeedbackWidget({
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
           submittedAt: new Date().toISOString(),
-          screenshot: screenshotDataUrl ?? undefined,
-          attachment: attachmentDataUrl ?? undefined,
+          screenshotBase64: screenshot?.base64 ?? undefined,
+          screenshotMimeType: screenshot?.mimeType ?? undefined,
+          attachmentBase64: attachment?.base64 ?? undefined,
+          attachmentMimeType: attachment?.mimeType ?? undefined,
           attachmentFilename: attachmentFilename ?? undefined,
         }),
       });
@@ -264,16 +275,16 @@ export default function FeedbackWidget({
                   <button
                     type="button"
                     className="fw-attach-btn"
-                    data-active={screenshotDataUrl ? "true" : "false"}
+                    data-active={screenshot ? "true" : "false"}
                     disabled={isCapturing}
                     onClick={handleStartPicking}
-                    title={screenshotDataUrl ? "Screenshot captured — click to recapture" : "Capture a part of the page"}
+                    title={screenshot ? "Screenshot captured — click to recapture" : "Capture a part of the page"}
                   >
-                    {screenshotDataUrl ? <CheckIcon /> : <CrosshairIcon />}
+                    {screenshot ? <CheckIcon /> : <CrosshairIcon />}
                     <span className="fw-attach-label">
-                      {isCapturing ? "Capturing…" : screenshotDataUrl ? "Captured" : "Capture element"}
+                      {isCapturing ? "Capturing…" : screenshot ? "Captured" : "Capture element"}
                     </span>
-                    {screenshotDataUrl && (
+                    {screenshot && (
                       <span
                         role="button"
                         tabIndex={0}
@@ -281,7 +292,7 @@ export default function FeedbackWidget({
                         className="fw-attach-remove"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setScreenshotDataUrl(null);
+                          setScreenshot(null);
                         }}
                       >
                         <CloseIcon />
@@ -292,13 +303,13 @@ export default function FeedbackWidget({
                   <button
                     type="button"
                     className="fw-attach-btn"
-                    data-active={attachmentDataUrl ? "true" : "false"}
+                    data-active={attachment ? "true" : "false"}
                     onClick={() => fileInputRef.current?.click()}
                     title={attachmentFilename ? `${attachmentFilename} — click to replace` : "Attach an image (max 4MB)"}
                   >
-                    {attachmentDataUrl ? <CheckIcon /> : <PaperclipIcon />}
-                    <span className="fw-attach-label">{attachmentDataUrl ? (attachmentFilename ?? "Attached") : "Attach image"}</span>
-                    {attachmentDataUrl && (
+                    {attachment ? <CheckIcon /> : <PaperclipIcon />}
+                    <span className="fw-attach-label">{attachment ? (attachmentFilename ?? "Attached") : "Attach image"}</span>
+                    {attachment && (
                       <span
                         role="button"
                         tabIndex={0}
@@ -306,7 +317,7 @@ export default function FeedbackWidget({
                         className="fw-attach-remove"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setAttachmentDataUrl(null);
+                          setAttachment(null);
                           setAttachmentFilename(null);
                         }}
                       >

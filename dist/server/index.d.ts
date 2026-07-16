@@ -91,8 +91,10 @@ declare const FeedbackSubmissionSchema: z.ZodObject<{
     viewportWidth: z.ZodNumber;
     viewportHeight: z.ZodNumber;
     submittedAt: z.ZodDate;
-    screenshot: z.ZodOptional<z.ZodString>;
-    attachment: z.ZodOptional<z.ZodString>;
+    screenshotBase64: z.ZodOptional<z.ZodString>;
+    screenshotMimeType: z.ZodOptional<z.ZodString>;
+    attachmentBase64: z.ZodOptional<z.ZodString>;
+    attachmentMimeType: z.ZodOptional<z.ZodString>;
     attachmentFilename: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     name: string;
@@ -105,8 +107,10 @@ declare const FeedbackSubmissionSchema: z.ZodObject<{
     viewportHeight: number;
     submittedAt: Date;
     website?: string | undefined;
-    screenshot?: string | undefined;
-    attachment?: string | undefined;
+    screenshotBase64?: string | undefined;
+    screenshotMimeType?: string | undefined;
+    attachmentBase64?: string | undefined;
+    attachmentMimeType?: string | undefined;
     attachmentFilename?: string | undefined;
 }, {
     name: string;
@@ -119,8 +123,10 @@ declare const FeedbackSubmissionSchema: z.ZodObject<{
     viewportHeight: number;
     submittedAt: Date;
     website?: string | undefined;
-    screenshot?: string | undefined;
-    attachment?: string | undefined;
+    screenshotBase64?: string | undefined;
+    screenshotMimeType?: string | undefined;
+    attachmentBase64?: string | undefined;
+    attachmentMimeType?: string | undefined;
     attachmentFilename?: string | undefined;
 }>;
 type FeedbackSubmissionInput = z.infer<typeof FeedbackSubmissionSchema>;

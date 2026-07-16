@@ -4,22 +4,20 @@ import { rateLimit } from "./rateLimit";
 import { createMondayFeedbackItem, uploadFileToMondayUpdate } from "./mondayClient";
 
 const MAX_DECODED_BYTES = 4 * 1024 * 1024;
-const DATA_URL_PATTERN = /^data:([^;]+);base64,(.+)$/s;
 
 interface DecodedImage {
   mimeType: string;
   buffer: Buffer;
 }
 
-function decodeDataUrl(dataUrl: string): DecodedImage | null {
-  const match = DATA_URL_PATTERN.exec(dataUrl);
-  if (!match) return null;
-
-  const [, mimeType, base64] = match;
+// Images arrive as raw base64 + a separate mime type (never a
+// "data:...;base64," string — see schema.ts for why), so there's nothing to
+// parse here beyond decoding and size-checking.
+function decodeImage(base64: string, mimeType: string | undefined): DecodedImage | null {
   const buffer = Buffer.from(base64, "base64");
   if (buffer.length > MAX_DECODED_BYTES) return null;
 
-  return { mimeType, buffer };
+  return { mimeType: mimeType || "application/octet-stream", buffer };
 }
 
 function extensionForMimeType(mimeType: string): string {
@@ -76,7 +74,15 @@ export function createFeedbackRouter(options: CreateFeedbackRouterOptions): IRou
       return;
     }
 
-    const { website, screenshot, attachment, attachmentFilename, ...fields } = parsed.data;
+    const {
+      website,
+      screenshotBase64,
+      screenshotMimeType,
+      attachmentBase64,
+      attachmentMimeType,
+      attachmentFilename,
+      ...fields
+    } = parsed.data;
 
     // Honeypot: real users never fill this hidden field. Silently pretend
     // success so bots don't learn they were filtered.
@@ -85,14 +91,14 @@ export function createFeedbackRouter(options: CreateFeedbackRouterOptions): IRou
       return;
     }
 
-    const decodedScreenshot = screenshot ? decodeDataUrl(screenshot) : null;
-    if (screenshot && !decodedScreenshot) {
+    const decodedScreenshot = screenshotBase64 ? decodeImage(screenshotBase64, screenshotMimeType) : null;
+    if (screenshotBase64 && !decodedScreenshot) {
       res.status(400).json({ message: "Screenshot is invalid or exceeds the 4MB limit." });
       return;
     }
 
-    const decodedAttachment = attachment ? decodeDataUrl(attachment) : null;
-    if (attachment && !decodedAttachment) {
+    const decodedAttachment = attachmentBase64 ? decodeImage(attachmentBase64, attachmentMimeType) : null;
+    if (attachmentBase64 && !decodedAttachment) {
       res.status(400).json({ message: "Attachment is invalid or exceeds the 4MB limit." });
       return;
     }

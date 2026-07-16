@@ -11,8 +11,10 @@ interface FeedbackSubmission {
     viewportWidth: number;
     viewportHeight: number;
     submittedAt: string;
-    screenshot?: string;
-    attachment?: string;
+    screenshotBase64?: string;
+    screenshotMimeType?: string;
+    attachmentBase64?: string;
+    attachmentMimeType?: string;
     attachmentFilename?: string;
 }
 interface FeedbackSubmissionResult {

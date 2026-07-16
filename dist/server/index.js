@@ -15,8 +15,13 @@ var FeedbackSubmissionSchema = z.object({
   viewportWidth: z.number(),
   viewportHeight: z.number(),
   submittedAt: z.coerce.date(),
-  screenshot: z.string().max(56e5).optional(),
-  attachment: z.string().max(56e5).optional(),
+  // Raw base64 + mime type, never a "data:...;base64," string — that literal
+  // pattern trips a common WAF/ModSecurity data-URI detection rule on some
+  // hosts (confirmed blocking requests as small as 68 bytes on one host).
+  screenshotBase64: z.string().max(56e5).optional(),
+  screenshotMimeType: z.string().max(100).optional(),
+  attachmentBase64: z.string().max(56e5).optional(),
+  attachmentMimeType: z.string().max(100).optional(),
   attachmentFilename: z.string().max(200).optional()
 });
 
@@ -149,14 +154,10 @@ async function uploadFileToMondayUpdate(token, updateId, buffer, filename, mimeT
 
 // server/createFeedbackRouter.ts
 var MAX_DECODED_BYTES = 4 * 1024 * 1024;
-var DATA_URL_PATTERN = /^data:([^;]+);base64,(.+)$/s;
-function decodeDataUrl(dataUrl) {
-  const match = DATA_URL_PATTERN.exec(dataUrl);
-  if (!match) return null;
-  const [, mimeType, base64] = match;
+function decodeImage(base64, mimeType) {
   const buffer = Buffer.from(base64, "base64");
   if (buffer.length > MAX_DECODED_BYTES) return null;
-  return { mimeType, buffer };
+  return { mimeType: mimeType || "application/octet-stream", buffer };
 }
 function extensionForMimeType(mimeType) {
   const subtype = mimeType.split("/")[1] ?? "png";
@@ -179,18 +180,26 @@ function createFeedbackRouter(options) {
       res.status(400).json({ message: "Invalid feedback submission." });
       return;
     }
-    const { website, screenshot, attachment, attachmentFilename, ...fields } = parsed.data;
+    const {
+      website,
+      screenshotBase64,
+      screenshotMimeType,
+      attachmentBase64,
+      attachmentMimeType,
+      attachmentFilename,
+      ...fields
+    } = parsed.data;
     if (website) {
       res.status(200).json({ success: true, mondayItemId: "" });
       return;
     }
-    const decodedScreenshot = screenshot ? decodeDataUrl(screenshot) : null;
-    if (screenshot && !decodedScreenshot) {
+    const decodedScreenshot = screenshotBase64 ? decodeImage(screenshotBase64, screenshotMimeType) : null;
+    if (screenshotBase64 && !decodedScreenshot) {
       res.status(400).json({ message: "Screenshot is invalid or exceeds the 4MB limit." });
       return;
     }
-    const decodedAttachment = attachment ? decodeDataUrl(attachment) : null;
-    if (attachment && !decodedAttachment) {
+    const decodedAttachment = attachmentBase64 ? decodeImage(attachmentBase64, attachmentMimeType) : null;
+    if (attachmentBase64 && !decodedAttachment) {
       res.status(400).json({ message: "Attachment is invalid or exceeds the 4MB limit." });
       return;
     }

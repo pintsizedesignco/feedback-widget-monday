@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import html2canvas from "html2canvas";
 
+export interface CapturedImage {
+  base64: string;
+  mimeType: string;
+}
+
 interface ElementPickerProps {
   active: boolean;
-  onCapture: (dataUrl: string) => void;
+  onCapture: (image: CapturedImage) => void;
   onCancel: () => void;
   onCapturing: (capturing: boolean) => void;
 }
@@ -29,7 +34,17 @@ function resolveBackgroundColor(el: Element): string {
   return "#ffffff";
 }
 
-async function captureElement(el: Element): Promise<string> {
+// Strips the "data:<mime>;base64," prefix — that literal string trips a
+// common WAF/ModSecurity data-URI detection rule on some hosts (seen
+// blocking requests as small as 68 bytes), so it must never appear in the
+// request body. The mime type travels as a separate field instead.
+function toRawBase64(dataUrl: string): CapturedImage {
+  const commaIndex = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(5, dataUrl.indexOf(";")); // after "data:", before ";base64"
+  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "image/jpeg" };
+}
+
+async function captureElement(el: Element): Promise<CapturedImage> {
   const scale = Math.min(2, window.devicePixelRatio || 1);
   const rawCanvas = await html2canvas(el as HTMLElement, {
     backgroundColor: null,
@@ -47,7 +62,7 @@ async function captureElement(el: Element): Promise<string> {
   padded.height = rawCanvas.height + padding * 2;
 
   const ctx = padded.getContext("2d");
-  if (!ctx) return rawCanvas.toDataURL("image/jpeg", 0.72);
+  if (!ctx) return toRawBase64(rawCanvas.toDataURL("image/jpeg", 0.72));
 
   ctx.fillStyle = resolveBackgroundColor(el);
   ctx.fillRect(0, 0, padded.width, padded.height);
@@ -65,10 +80,10 @@ async function captureElement(el: Element): Promise<string> {
 const TARGET_BASE64_BYTES = 700_000;
 const QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
 
-function compressToTarget(canvas: HTMLCanvasElement): string {
+function compressToTarget(canvas: HTMLCanvasElement): CapturedImage {
   for (const quality of QUALITY_STEPS) {
     const dataUrl = canvas.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
   }
 
   // Still too big even at the lowest quality — the pixel dimensions
@@ -78,16 +93,16 @@ function compressToTarget(canvas: HTMLCanvasElement): string {
   half.width = Math.max(1, Math.round(canvas.width / 2));
   half.height = Math.max(1, Math.round(canvas.height / 2));
   const ctx = half.getContext("2d");
-  if (!ctx) return canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  if (!ctx) return toRawBase64(canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
   ctx.drawImage(canvas, 0, 0, half.width, half.height);
 
   for (const quality of QUALITY_STEPS) {
     const dataUrl = half.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return dataUrl;
+    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
   }
 
   // Last resort: smallest we can reasonably produce.
-  return half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]);
+  return toRawBase64(half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
 }
 
 /**
@@ -123,8 +138,8 @@ export default function ElementPicker({ active, onCapture, onCancel, onCapturing
 
       onCapturing(true);
       try {
-        const dataUrl = await captureElement(target);
-        onCapture(dataUrl);
+        const image = await captureElement(target);
+        onCapture(image);
       } finally {
         onCapturing(false);
       }
