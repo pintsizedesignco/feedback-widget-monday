@@ -4,19 +4,17 @@
   "description": "A drop-in floating feedback widget (element picker + screenshot capture + image upload) that files submissions as monday.com items.",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     },
     "./server": {
       "types": "./dist/server/index.d.ts",
-      "import": "./dist/server/index.js",
-      "require": "./dist/server/index.cjs"
+      "import": "./dist/server/index.js"
     }
   },
   "files": [

@@ -3,18 +3,21 @@ import { defineConfig } from "tsup";
 export default defineConfig([
   {
     entry: { index: "src/index.ts" },
-    format: ["esm", "cjs"],
+    // ESM-only: shipping both ESM and CJS builds of a package that uses React
+    // context/hooks (via Radix Dialog) risks a dual-package hazard — a
+    // bundler that ends up loading both formats for the same package treats
+    // them as two separate module instances, splitting React's internal
+    // dispatcher and producing "Invalid hook call" errors that have nothing
+    // to do with an actual duplicate react install.
+    format: ["esm"],
     dts: true,
     sourcemap: true,
     clean: true,
-    // Keep react-relying deps external rather than bundled: bundling a package
-    // that itself uses React context/hooks (Radix Dialog) risks a dual-package
-    // hazard where the consumer's bundler can't tell it's the same React.
     external: ["react", "react-dom", "@radix-ui/react-dialog"],
   },
   {
     entry: { "server/index": "server/index.ts" },
-    format: ["esm", "cjs"],
+    format: ["esm"],
     dts: true,
     sourcemap: true,
     external: ["express"],

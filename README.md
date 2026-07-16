@@ -119,5 +119,11 @@ correctly.
   multipart) to keep the client dependency-free — make sure your server's
   JSON body limit is raised accordingly (see the Express example above).
 - The client bundle has no required peer dependency beyond React —
-  `@radix-ui/react-dialog` and `html2canvas` are bundled as regular
-  dependencies.
+  `@radix-ui/react-dialog` and `html2canvas` are regular dependencies,
+  auto-installed alongside the package.
+- Published as ESM only (both client and server). Shipping a dual ESM+CJS
+  build risks a dual-package hazard for any dependency that relies on React
+  context/hooks (like the dialog) — a bundler that ends up loading both
+  formats of the same package treats them as separate module instances,
+  which splits React's internal state and throws "Invalid hook call" even
+  though there's only one real copy of React installed.
