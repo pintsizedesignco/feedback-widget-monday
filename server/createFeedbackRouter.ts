@@ -1,24 +1,24 @@
 import { Router, type IRouter } from "express";
+import multer from "multer";
 import { FeedbackSubmissionSchema } from "./schema";
 import { rateLimit } from "./rateLimit";
 import { createMondayFeedbackItem, uploadFileToMondayUpdate } from "./mondayClient";
 
-const MAX_DECODED_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
-interface DecodedImage {
-  mimeType: string;
-  buffer: Buffer;
-}
+// Files arrive as real multipart parts (binary bytes), never base64 text in
+// the JSON/text body — a WAF on at least one production host blocks base64
+// image payloads outright (confirmed down to 68 bytes, regardless of
+// "data:...;base64," wrapper format), so this is the only reliable fix.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_BYTES },
+});
 
-// Images arrive as raw base64 + a separate mime type (never a
-// "data:...;base64," string — see schema.ts for why), so there's nothing to
-// parse here beyond decoding and size-checking.
-function decodeImage(base64: string, mimeType: string | undefined): DecodedImage | null {
-  const buffer = Buffer.from(base64, "base64");
-  if (buffer.length > MAX_DECODED_BYTES) return null;
-
-  return { mimeType: mimeType || "application/octet-stream", buffer };
-}
+const uploadFields = upload.fields([
+  { name: "screenshot", maxCount: 1 },
+  { name: "attachment", maxCount: 1 },
+]);
 
 function extensionForMimeType(mimeType: string): string {
   const subtype = mimeType.split("/")[1] ?? "png";
@@ -67,87 +67,85 @@ export function createFeedbackRouter(options: CreateFeedbackRouterOptions): IRou
   const feedbackRateLimit = rateLimit(rateLimitOptions);
 
   router.post(path, feedbackRateLimit, (req, res) => {
-    const parsed = FeedbackSubmissionSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      res.status(400).json({ message: "Invalid feedback submission." });
-      return;
-    }
-
-    const {
-      website,
-      screenshotBase64,
-      screenshotMimeType,
-      attachmentBase64,
-      attachmentMimeType,
-      attachmentFilename,
-      ...fields
-    } = parsed.data;
-
-    // Honeypot: real users never fill this hidden field. Silently pretend
-    // success so bots don't learn they were filtered.
-    if (website) {
-      res.status(200).json({ success: true, mondayItemId: "" });
-      return;
-    }
-
-    const decodedScreenshot = screenshotBase64 ? decodeImage(screenshotBase64, screenshotMimeType) : null;
-    if (screenshotBase64 && !decodedScreenshot) {
-      res.status(400).json({ message: "Screenshot is invalid or exceeds the 4MB limit." });
-      return;
-    }
-
-    const decodedAttachment = attachmentBase64 ? decodeImage(attachmentBase64, attachmentMimeType) : null;
-    if (attachmentBase64 && !decodedAttachment) {
-      res.status(400).json({ message: "Attachment is invalid or exceeds the 4MB limit." });
-      return;
-    }
-
-    createMondayFeedbackItem(
-      mondayApiToken,
-      mondayBoardId,
-      { ...fields, submittedAt: fields.submittedAt.toISOString() },
-      columnMap,
-    )
-      .then(async ({ itemId, updateId }) => {
-        res.status(200).json({ success: true, mondayItemId: itemId });
-
-        // File attachment happens after responding: the feedback record itself
-        // (item + full-details update) already succeeded, and attaching files is
-        // best-effort — a failure here shouldn't turn a successful submission
-        // into an error for the user.
-        if (decodedScreenshot) {
-          try {
-            await uploadFileToMondayUpdate(
-              mondayApiToken,
-              updateId,
-              decodedScreenshot.buffer,
-              `screenshot.${extensionForMimeType(decodedScreenshot.mimeType)}`,
-              decodedScreenshot.mimeType,
-            );
-          } catch (err) {
-            logger.error({ err }, "Failed to attach screenshot to monday.com update");
-          }
+    uploadFields(req, res, (err: unknown) => {
+      if (err) {
+        if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+          res.status(400).json({ message: "Image exceeds the 4MB limit." });
+          return;
         }
+        logger.error({ err }, "Failed to process feedback upload");
+        res.status(400).json({ message: "Invalid feedback submission." });
+        return;
+      }
 
-        if (decodedAttachment) {
-          try {
-            await uploadFileToMondayUpdate(
-              mondayApiToken,
-              updateId,
-              decodedAttachment.buffer,
-              attachmentFilename || `attachment.${extensionForMimeType(decodedAttachment.mimeType)}`,
-              decodedAttachment.mimeType,
-            );
-          } catch (err) {
-            logger.error({ err }, "Failed to attach image to monday.com update");
+      const parsed = FeedbackSubmissionSchema.safeParse(req.body);
+
+      if (!parsed.success) {
+        res.status(400).json({ message: "Invalid feedback submission." });
+        return;
+      }
+
+      const { website, ...fields } = parsed.data;
+
+      // Honeypot: real users never fill this hidden field. Silently pretend
+      // success so bots don't learn they were filtered.
+      if (website) {
+        res.status(200).json({ success: true, mondayItemId: "" });
+        return;
+      }
+
+      const files = req.files as
+        | { screenshot?: Express.Multer.File[]; attachment?: Express.Multer.File[] }
+        | undefined;
+      const screenshotFile = files?.screenshot?.[0];
+      const attachmentFile = files?.attachment?.[0];
+
+      createMondayFeedbackItem(
+        mondayApiToken,
+        mondayBoardId,
+        { ...fields, submittedAt: fields.submittedAt.toISOString() },
+        columnMap,
+      )
+        .then(async ({ itemId, updateId }) => {
+          res.status(200).json({ success: true, mondayItemId: itemId });
+
+          // File attachment happens after responding: the feedback record itself
+          // (item + full-details update) already succeeded, and attaching files is
+          // best-effort — a failure here shouldn't turn a successful submission
+          // into an error for the user.
+          if (screenshotFile) {
+            try {
+              await uploadFileToMondayUpdate(
+                mondayApiToken,
+                updateId,
+                screenshotFile.buffer,
+                `screenshot.${extensionForMimeType(screenshotFile.mimetype)}`,
+                screenshotFile.mimetype,
+              );
+            } catch (uploadErr) {
+              logger.error({ err: uploadErr }, "Failed to attach screenshot to monday.com update");
+            }
           }
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Failed to create monday.com feedback item");
-        res.status(502).json({ message: "Failed to submit feedback. Please try again later." });
-      });
+
+          if (attachmentFile) {
+            try {
+              await uploadFileToMondayUpdate(
+                mondayApiToken,
+                updateId,
+                attachmentFile.buffer,
+                attachmentFile.originalname || `attachment.${extensionForMimeType(attachmentFile.mimetype)}`,
+                attachmentFile.mimetype,
+              );
+            } catch (uploadErr) {
+              logger.error({ err: uploadErr }, "Failed to attach image to monday.com update");
+            }
+          }
+        })
+        .catch((createErr) => {
+          logger.error({ err: createErr }, "Failed to create monday.com feedback item");
+          res.status(502).json({ message: "Failed to submit feedback. Please try again later." });
+        });
+    });
   });
 
   return router;

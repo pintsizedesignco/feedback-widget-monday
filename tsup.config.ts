@@ -20,6 +20,6 @@ export default defineConfig([
     format: ["esm"],
     dts: true,
     sourcemap: true,
-    external: ["express"],
+    external: ["express", "multer"],
   },
 ]);

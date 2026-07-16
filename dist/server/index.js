@@ -1,5 +1,6 @@
 // server/createFeedbackRouter.ts
 import { Router } from "express";
+import multer from "multer";
 
 // server/schema.ts
 import { z } from "zod";
@@ -12,17 +13,10 @@ var FeedbackSubmissionSchema = z.object({
   pageUrl: z.string(),
   pageTitle: z.string(),
   userAgent: z.string(),
-  viewportWidth: z.number(),
-  viewportHeight: z.number(),
-  submittedAt: z.coerce.date(),
-  // Raw base64 + mime type, never a "data:...;base64," string — that literal
-  // pattern trips a common WAF/ModSecurity data-URI detection rule on some
-  // hosts (confirmed blocking requests as small as 68 bytes on one host).
-  screenshotBase64: z.string().max(56e5).optional(),
-  screenshotMimeType: z.string().max(100).optional(),
-  attachmentBase64: z.string().max(56e5).optional(),
-  attachmentMimeType: z.string().max(100).optional(),
-  attachmentFilename: z.string().max(200).optional()
+  // Multipart text fields always arrive as strings, unlike JSON bodies.
+  viewportWidth: z.coerce.number(),
+  viewportHeight: z.coerce.number(),
+  submittedAt: z.coerce.date()
 });
 
 // server/rateLimit.ts
@@ -153,12 +147,15 @@ async function uploadFileToMondayUpdate(token, updateId, buffer, filename, mimeT
 }
 
 // server/createFeedbackRouter.ts
-var MAX_DECODED_BYTES = 4 * 1024 * 1024;
-function decodeImage(base64, mimeType) {
-  const buffer = Buffer.from(base64, "base64");
-  if (buffer.length > MAX_DECODED_BYTES) return null;
-  return { mimeType: mimeType || "application/octet-stream", buffer };
-}
+var MAX_FILE_BYTES = 4 * 1024 * 1024;
+var upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_BYTES }
+});
+var uploadFields = upload.fields([
+  { name: "screenshot", maxCount: 1 },
+  { name: "attachment", maxCount: 1 }
+]);
 function extensionForMimeType(mimeType) {
   const subtype = mimeType.split("/")[1] ?? "png";
   return subtype === "jpeg" ? "jpg" : subtype;
@@ -175,70 +172,66 @@ function createFeedbackRouter(options) {
   const router = Router();
   const feedbackRateLimit = rateLimit(rateLimitOptions);
   router.post(path, feedbackRateLimit, (req, res) => {
-    const parsed = FeedbackSubmissionSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ message: "Invalid feedback submission." });
-      return;
-    }
-    const {
-      website,
-      screenshotBase64,
-      screenshotMimeType,
-      attachmentBase64,
-      attachmentMimeType,
-      attachmentFilename,
-      ...fields
-    } = parsed.data;
-    if (website) {
-      res.status(200).json({ success: true, mondayItemId: "" });
-      return;
-    }
-    const decodedScreenshot = screenshotBase64 ? decodeImage(screenshotBase64, screenshotMimeType) : null;
-    if (screenshotBase64 && !decodedScreenshot) {
-      res.status(400).json({ message: "Screenshot is invalid or exceeds the 4MB limit." });
-      return;
-    }
-    const decodedAttachment = attachmentBase64 ? decodeImage(attachmentBase64, attachmentMimeType) : null;
-    if (attachmentBase64 && !decodedAttachment) {
-      res.status(400).json({ message: "Attachment is invalid or exceeds the 4MB limit." });
-      return;
-    }
-    createMondayFeedbackItem(
-      mondayApiToken,
-      mondayBoardId,
-      { ...fields, submittedAt: fields.submittedAt.toISOString() },
-      columnMap
-    ).then(async ({ itemId, updateId }) => {
-      res.status(200).json({ success: true, mondayItemId: itemId });
-      if (decodedScreenshot) {
-        try {
-          await uploadFileToMondayUpdate(
-            mondayApiToken,
-            updateId,
-            decodedScreenshot.buffer,
-            `screenshot.${extensionForMimeType(decodedScreenshot.mimeType)}`,
-            decodedScreenshot.mimeType
-          );
-        } catch (err) {
-          logger.error({ err }, "Failed to attach screenshot to monday.com update");
+    uploadFields(req, res, (err) => {
+      if (err) {
+        if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+          res.status(400).json({ message: "Image exceeds the 4MB limit." });
+          return;
         }
+        logger.error({ err }, "Failed to process feedback upload");
+        res.status(400).json({ message: "Invalid feedback submission." });
+        return;
       }
-      if (decodedAttachment) {
-        try {
-          await uploadFileToMondayUpdate(
-            mondayApiToken,
-            updateId,
-            decodedAttachment.buffer,
-            attachmentFilename || `attachment.${extensionForMimeType(decodedAttachment.mimeType)}`,
-            decodedAttachment.mimeType
-          );
-        } catch (err) {
-          logger.error({ err }, "Failed to attach image to monday.com update");
+      const parsed = FeedbackSubmissionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ message: "Invalid feedback submission." });
+        return;
+      }
+      const { website, ...fields } = parsed.data;
+      if (website) {
+        res.status(200).json({ success: true, mondayItemId: "" });
+        return;
+      }
+      const files = req.files;
+      const screenshotFile = files?.screenshot?.[0];
+      const attachmentFile = files?.attachment?.[0];
+      createMondayFeedbackItem(
+        mondayApiToken,
+        mondayBoardId,
+        { ...fields, submittedAt: fields.submittedAt.toISOString() },
+        columnMap
+      ).then(async ({ itemId, updateId }) => {
+        res.status(200).json({ success: true, mondayItemId: itemId });
+        if (screenshotFile) {
+          try {
+            await uploadFileToMondayUpdate(
+              mondayApiToken,
+              updateId,
+              screenshotFile.buffer,
+              `screenshot.${extensionForMimeType(screenshotFile.mimetype)}`,
+              screenshotFile.mimetype
+            );
+          } catch (uploadErr) {
+            logger.error({ err: uploadErr }, "Failed to attach screenshot to monday.com update");
+          }
         }
-      }
-    }).catch((err) => {
-      logger.error({ err }, "Failed to create monday.com feedback item");
-      res.status(502).json({ message: "Failed to submit feedback. Please try again later." });
+        if (attachmentFile) {
+          try {
+            await uploadFileToMondayUpdate(
+              mondayApiToken,
+              updateId,
+              attachmentFile.buffer,
+              attachmentFile.originalname || `attachment.${extensionForMimeType(attachmentFile.mimetype)}`,
+              attachmentFile.mimetype
+            );
+          } catch (uploadErr) {
+            logger.error({ err: uploadErr }, "Failed to attach image to monday.com update");
+          }
+        }
+      }).catch((createErr) => {
+        logger.error({ err: createErr }, "Failed to create monday.com feedback item");
+        res.status(502).json({ message: "Failed to submit feedback. Please try again later." });
+      });
     });
   });
   return router;

@@ -327,10 +327,8 @@ function resolveBackgroundColor(el) {
   }
   return "#ffffff";
 }
-function toRawBase64(dataUrl) {
-  const commaIndex = dataUrl.indexOf(",");
-  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
-  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "image/jpeg" };
+function canvasToBlob(canvas, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
 }
 async function captureElement(el) {
   const scale = Math.min(2, window.devicePixelRatio || 1);
@@ -345,30 +343,38 @@ async function captureElement(el) {
   padded.width = rawCanvas.width + padding * 2;
   padded.height = rawCanvas.height + padding * 2;
   const ctx = padded.getContext("2d");
-  if (!ctx) return toRawBase64(rawCanvas.toDataURL("image/jpeg", 0.72));
+  if (!ctx) {
+    const blob = await canvasToBlob(rawCanvas, 0.72);
+    return { blob: blob ?? new Blob(), mimeType: "image/jpeg" };
+  }
   ctx.fillStyle = resolveBackgroundColor(el);
   ctx.fillRect(0, 0, padded.width, padded.height);
   ctx.drawImage(rawCanvas, padding, padding);
   return compressToTarget(padded);
 }
-var TARGET_BASE64_BYTES = 7e5;
+var TARGET_BYTES = 7e5;
 var QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
-function compressToTarget(canvas) {
+async function compressToTarget(canvas) {
   for (const quality of QUALITY_STEPS) {
-    const dataUrl = canvas.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
+    const blob2 = await canvasToBlob(canvas, quality);
+    if (blob2 && blob2.size <= TARGET_BYTES) return { blob: blob2, mimeType: "image/jpeg" };
   }
   const half = document.createElement("canvas");
   half.width = Math.max(1, Math.round(canvas.width / 2));
   half.height = Math.max(1, Math.round(canvas.height / 2));
   const ctx = half.getContext("2d");
-  if (!ctx) return toRawBase64(canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
+  const lowestQuality = QUALITY_STEPS[QUALITY_STEPS.length - 1] ?? 0.2;
+  if (!ctx) {
+    const blob2 = await canvasToBlob(canvas, lowestQuality);
+    return { blob: blob2 ?? new Blob(), mimeType: "image/jpeg" };
+  }
   ctx.drawImage(canvas, 0, 0, half.width, half.height);
   for (const quality of QUALITY_STEPS) {
-    const dataUrl = half.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
+    const blob2 = await canvasToBlob(half, quality);
+    if (blob2 && blob2.size <= TARGET_BYTES) return { blob: blob2, mimeType: "image/jpeg" };
   }
-  return toRawBase64(half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
+  const blob = await canvasToBlob(half, lowestQuality);
+  return { blob: blob ?? new Blob(), mimeType: "image/jpeg" };
 }
 function ElementPicker({ active, onCapture, onCancel, onCapturing }) {
   const [rect, setRect] = useState2(null);
@@ -455,11 +461,6 @@ function CheckIcon(props) {
 
 // src/FeedbackWidget.tsx
 import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
-function toRawBase642(dataUrl) {
-  const commaIndex = dataUrl.indexOf(",");
-  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
-  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "application/octet-stream" };
-}
 var DEFAULT_CATEGORIES = ["Design", "Content", "Bug", "Other"];
 var DEFAULT_STORAGE_KEY = "feedback-widget-name";
 var MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
@@ -546,12 +547,8 @@ function FeedbackWidget({
       showToast({ title: "Image too large", description: "Please choose an image under 4MB.", variant: "destructive" });
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAttachment(toRawBase642(reader.result));
-      setAttachmentFilename(file.name);
-    };
-    reader.readAsDataURL(file);
+    setAttachment({ blob: file, mimeType: file.type });
+    setAttachmentFilename(file.name);
   };
   const validate = () => {
     const next = {};
@@ -565,26 +562,26 @@ function FeedbackWidget({
     if (!validate()) return;
     setIsSubmitting(true);
     try {
+      const formData = new FormData();
+      formData.set("name", name);
+      formData.set("message", message);
+      formData.set("category", category);
+      formData.set("website", website);
+      formData.set("pageUrl", window.location.href);
+      formData.set("pageTitle", document.title);
+      formData.set("userAgent", navigator.userAgent);
+      formData.set("viewportWidth", String(window.innerWidth));
+      formData.set("viewportHeight", String(window.innerHeight));
+      formData.set("submittedAt", (/* @__PURE__ */ new Date()).toISOString());
+      if (screenshot) {
+        formData.set("screenshot", screenshot.blob, `screenshot.${screenshot.mimeType.split("/")[1] ?? "jpg"}`);
+      }
+      if (attachment) {
+        formData.set("attachment", attachment.blob, attachmentFilename ?? "attachment");
+      }
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          message,
-          category,
-          website,
-          pageUrl: window.location.href,
-          pageTitle: document.title,
-          userAgent: navigator.userAgent,
-          viewportWidth: window.innerWidth,
-          viewportHeight: window.innerHeight,
-          submittedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          screenshotBase64: screenshot?.base64 ?? void 0,
-          screenshotMimeType: screenshot?.mimeType ?? void 0,
-          attachmentBase64: attachment?.base64 ?? void 0,
-          attachmentMimeType: attachment?.mimeType ?? void 0,
-          attachmentFilename: attachmentFilename ?? void 0
-        })
+        body: formData
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await response.json();

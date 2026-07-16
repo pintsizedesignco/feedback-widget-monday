@@ -1,3 +1,7 @@
+// The text fields of a feedback submission. Sent as multipart/form-data
+// alongside optional "screenshot"/"attachment" file parts (not as JSON) — a
+// WAF on at least one production host blocks base64 image payloads outright,
+// so images always travel as real binary multipart parts.
 export interface FeedbackSubmission {
   name: string;
   message: string;
@@ -9,15 +13,6 @@ export interface FeedbackSubmission {
   viewportWidth: number;
   viewportHeight: number;
   submittedAt: string;
-  // Images travel as raw base64 + a separate mime type, never as a
-  // `data:...;base64,` string — that literal pattern trips a common WAF/
-  // ModSecurity rule (data-URI detection) on some hosts, even for tiny
-  // images, causing a 403 before the request ever reaches the server.
-  screenshotBase64?: string;
-  screenshotMimeType?: string;
-  attachmentBase64?: string;
-  attachmentMimeType?: string;
-  attachmentFilename?: string;
 }
 
 export interface FeedbackSubmissionResult {

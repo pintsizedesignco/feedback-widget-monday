@@ -52,7 +52,6 @@ import express from "express";
 import { createFeedbackRouter } from "feedback-widget-monday/server";
 
 const app = express();
-app.use(express.json({ limit: "12mb" })); // screenshots/attachments are base64 in the JSON body
 
 app.use("/api", createFeedbackRouter({
   mondayApiToken: process.env.MONDAY_API_TOKEN!,
@@ -115,9 +114,11 @@ correctly.
 
 ## Notes
 
-- Screenshots/attachments are sent as base64 data URLs in the JSON body (not
-  multipart) to keep the client dependency-free — make sure your server's
-  JSON body limit is raised accordingly (see the Express example above).
+- Screenshots/attachments are sent as real multipart/form-data file parts
+  (via `multer`, memory storage, 4MB per-file limit), not base64 text — some
+  hosts run a WAF that blocks base64-encoded image data outright regardless
+  of wrapper format, so raw binary upload is both more robust and avoids
+  bloating the request body by ~33%.
 - The client bundle has no required peer dependency beyond React —
   `@radix-ui/react-dialog` and `html2canvas` are regular dependencies,
   auto-installed alongside the package.

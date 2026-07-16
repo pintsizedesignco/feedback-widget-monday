@@ -6,15 +6,6 @@ import ElementPicker, { type CapturedImage } from "./ElementPicker";
 import { MessageIcon, CloseIcon, CrosshairIcon, PaperclipIcon, CheckIcon } from "./icons";
 import type { FeedbackWidgetProps, FeedbackSubmissionResult } from "./types";
 
-// Strips the "data:<mime>;base64," prefix for the manually-uploaded image,
-// same reasoning as ElementPicker's toRawBase64 — that literal string trips
-// a common WAF/ModSecurity data-URI detection rule on some hosts.
-function toRawBase64(dataUrl: string): CapturedImage {
-  const commaIndex = dataUrl.indexOf(",");
-  const meta = dataUrl.slice(5, dataUrl.indexOf(";"));
-  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "application/octet-stream" };
-}
-
 const DEFAULT_CATEGORIES = ["Design", "Content", "Bug", "Other"];
 const DEFAULT_STORAGE_KEY = "feedback-widget-name";
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
@@ -124,12 +115,8 @@ export default function FeedbackWidget({
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAttachment(toRawBase64(reader.result as string));
-      setAttachmentFilename(file.name);
-    };
-    reader.readAsDataURL(file);
+    setAttachment({ blob: file, mimeType: file.type });
+    setAttachmentFilename(file.name);
   };
 
   const validate = (): boolean => {
@@ -146,26 +133,29 @@ export default function FeedbackWidget({
 
     setIsSubmitting(true);
     try {
+      const formData = new FormData();
+      formData.set("name", name);
+      formData.set("message", message);
+      formData.set("category", category);
+      formData.set("website", website);
+      formData.set("pageUrl", window.location.href);
+      formData.set("pageTitle", document.title);
+      formData.set("userAgent", navigator.userAgent);
+      formData.set("viewportWidth", String(window.innerWidth));
+      formData.set("viewportHeight", String(window.innerHeight));
+      formData.set("submittedAt", new Date().toISOString());
+      if (screenshot) {
+        formData.set("screenshot", screenshot.blob, `screenshot.${screenshot.mimeType.split("/")[1] ?? "jpg"}`);
+      }
+      if (attachment) {
+        formData.set("attachment", attachment.blob, attachmentFilename ?? "attachment");
+      }
+
+      // No explicit Content-Type header: the browser sets the multipart
+      // boundary itself, which fetch can't replicate if set manually.
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          message,
-          category,
-          website,
-          pageUrl: window.location.href,
-          pageTitle: document.title,
-          userAgent: navigator.userAgent,
-          viewportWidth: window.innerWidth,
-          viewportHeight: window.innerHeight,
-          submittedAt: new Date().toISOString(),
-          screenshotBase64: screenshot?.base64 ?? undefined,
-          screenshotMimeType: screenshot?.mimeType ?? undefined,
-          attachmentBase64: attachment?.base64 ?? undefined,
-          attachmentMimeType: attachment?.mimeType ?? undefined,
-          attachmentFilename: attachmentFilename ?? undefined,
-        }),
+        body: formData,
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

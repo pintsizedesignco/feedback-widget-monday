@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import html2canvas from "html2canvas";
 
 export interface CapturedImage {
-  base64: string;
+  blob: Blob;
   mimeType: string;
 }
 
@@ -34,14 +34,8 @@ function resolveBackgroundColor(el: Element): string {
   return "#ffffff";
 }
 
-// Strips the "data:<mime>;base64," prefix — that literal string trips a
-// common WAF/ModSecurity data-URI detection rule on some hosts (seen
-// blocking requests as small as 68 bytes), so it must never appear in the
-// request body. The mime type travels as a separate field instead.
-function toRawBase64(dataUrl: string): CapturedImage {
-  const commaIndex = dataUrl.indexOf(",");
-  const meta = dataUrl.slice(5, dataUrl.indexOf(";")); // after "data:", before ";base64"
-  return { base64: dataUrl.slice(commaIndex + 1), mimeType: meta || "image/jpeg" };
+function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
 }
 
 async function captureElement(el: Element): Promise<CapturedImage> {
@@ -62,7 +56,10 @@ async function captureElement(el: Element): Promise<CapturedImage> {
   padded.height = rawCanvas.height + padding * 2;
 
   const ctx = padded.getContext("2d");
-  if (!ctx) return toRawBase64(rawCanvas.toDataURL("image/jpeg", 0.72));
+  if (!ctx) {
+    const blob = await canvasToBlob(rawCanvas, 0.72);
+    return { blob: blob ?? new Blob(), mimeType: "image/jpeg" };
+  }
 
   ctx.fillStyle = resolveBackgroundColor(el);
   ctx.fillRect(0, 0, padded.width, padded.height);
@@ -71,19 +68,17 @@ async function captureElement(el: Element): Promise<CapturedImage> {
   return compressToTarget(padded);
 }
 
-// Many hosts run a WAF (ModSecurity/Imunify360 etc.) with a default request
-// body limit around ~1MB — well under the 4MB the server itself allows. Stay
-// safely under that regardless of what the actual hosting environment turns
-// out to be: step down JPEG quality first, then physically downscale the
+// Keep captures reasonably small regardless of the actual hosting
+// environment: step down JPEG quality first, then physically downscale the
 // canvas if quality alone isn't enough (huge/high-DPI captures don't shrink
 // much further from quality alone).
-const TARGET_BASE64_BYTES = 700_000;
+const TARGET_BYTES = 700_000;
 const QUALITY_STEPS = [0.72, 0.5, 0.35, 0.2];
 
-function compressToTarget(canvas: HTMLCanvasElement): CapturedImage {
+async function compressToTarget(canvas: HTMLCanvasElement): Promise<CapturedImage> {
   for (const quality of QUALITY_STEPS) {
-    const dataUrl = canvas.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
+    const blob = await canvasToBlob(canvas, quality);
+    if (blob && blob.size <= TARGET_BYTES) return { blob, mimeType: "image/jpeg" };
   }
 
   // Still too big even at the lowest quality — the pixel dimensions
@@ -93,16 +88,21 @@ function compressToTarget(canvas: HTMLCanvasElement): CapturedImage {
   half.width = Math.max(1, Math.round(canvas.width / 2));
   half.height = Math.max(1, Math.round(canvas.height / 2));
   const ctx = half.getContext("2d");
-  if (!ctx) return toRawBase64(canvas.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
+  const lowestQuality = QUALITY_STEPS[QUALITY_STEPS.length - 1] ?? 0.2;
+  if (!ctx) {
+    const blob = await canvasToBlob(canvas, lowestQuality);
+    return { blob: blob ?? new Blob(), mimeType: "image/jpeg" };
+  }
   ctx.drawImage(canvas, 0, 0, half.width, half.height);
 
   for (const quality of QUALITY_STEPS) {
-    const dataUrl = half.toDataURL("image/jpeg", quality);
-    if (dataUrl.length <= TARGET_BASE64_BYTES) return toRawBase64(dataUrl);
+    const blob = await canvasToBlob(half, quality);
+    if (blob && blob.size <= TARGET_BYTES) return { blob, mimeType: "image/jpeg" };
   }
 
   // Last resort: smallest we can reasonably produce.
-  return toRawBase64(half.toDataURL("image/jpeg", QUALITY_STEPS[QUALITY_STEPS.length - 1]));
+  const blob = await canvasToBlob(half, lowestQuality);
+  return { blob: blob ?? new Blob(), mimeType: "image/jpeg" };
 }
 
 /**
